@@ -32,6 +32,14 @@ on:
         required: false
         type: string
         default: ""
+      kernel_modules_repo:
+        required: false
+        type: string
+        default: ""
+      kernel_devicetrees_repo:
+        required: false
+        type: string
+        default: ""
       ksu_variant:
         required: true
         type: string
@@ -66,6 +74,8 @@ jobs:
       CLANG_BRANCH: ${{ inputs.clang_branch }}
       LOCALVERSION: ${{ inputs.localversion }}
       EXTRA_CONFIG_FRAGMENT: ${{ inputs.extra_config_fragment }}
+      KERNEL_MODULES_REPO: ${{ inputs.kernel_modules_repo }}
+      KERNEL_DEVICETREES_REPO: ${{ inputs.kernel_devicetrees_repo }}
       KSU_VARIANT: ${{ inputs.ksu_variant }}
       ENABLE_SUSFS: ${{ inputs.enable_susfs }}
       USE_KPM: ${{ inputs.use_kpm }}
@@ -250,6 +260,73 @@ jobs:
             echo "SOURCE_COMMON_ROOT=$COMMON_ROOT"
             echo "KERNEL_RELEASE_BASE=$KERNEL_RELEASE_BASE"
           } >> "$GITHUB_ENV"
+
+      - name: 克隆厂商模块与设备树仓库
+        shell: bash
+        run: |
+          set -euo pipefail
+          KERNEL_ROOT="$SOURCE_KERNEL_ROOT"
+          COMMON_ROOT="$SOURCE_COMMON_ROOT"
+
+          # 厂商内核树（如 crDroid/OPLUS）通过符号链接引用同级仓库（sm8550-modules /
+          # sm8550-devicetrees）里的车机/传感器等驱动，这些目录在整棵 ROM `repo sync`
+          # 时才会出现。这里从符号链接目标反推需要的同级仓库名，并克隆到 kernel_platform 下，
+          # 使 common/ 内的 ../../../../<sibling> 链接可正确解析。
+          python3 - "$COMMON_ROOT" "$KERNEL_ROOT" "$KERNEL_REPO" "$KERNEL_BRANCH" \
+              "${KERNEL_MODULES_REPO:-}" "${KERNEL_DEVICETREES_REPO:-}" <<'PY'
+          import os, re, subprocess, sys
+
+          common, kroot, krepo, kbranch, mod_override, dt_override = sys.argv[1:7]
+
+          # 1) 从 common/ 内的符号链接找出会逃逸到仓库根之外的顶层同级目录名。
+          needed = set()
+          for dirpath, dirs, files in os.walk(common):
+              for name in list(dirs) + list(files):
+                  p = os.path.join(dirpath, name)
+                  if not os.path.islink(p):
+                      continue
+                  target = os.readlink(p)
+                  m = re.match(r'^((?:\.\./)+)([^/]+)/', target)
+                  if not m:
+                      continue
+                  ups = m.group(1).count('../')
+                  rel = os.path.relpath(dirpath, common)
+                  depth = 0 if rel == '.' else len(rel.split(os.sep))
+                  # 逃逸到 common 之外（即仓库根的父目录 = kernel_platform）时才需要同级仓库
+                  if ups > depth:
+                      needed.add(m.group(2))
+
+          if not needed:
+              print("未发现需要的厂商同级仓库，跳过。")
+              raise SystemExit(0)
+          print("检测到需要的同级仓库目录:", ", ".join(sorted(needed)))
+
+          # 2) 由主仓库 URL 反推同级仓库 URL：<dir>/android_kernel_<oem>_<soc[-suffix]>.git
+          base = krepo[:-4] if krepo.endswith(".git") else krepo
+          base_dir = base.rsplit("/", 1)[0]
+          base_name = base.rsplit("/", 1)[1]
+          soc = base_name.split("_")[-1]
+          prefix = base_name[: len(base_name) - len(soc)]
+
+          overrides = {}
+          for ov in (mod_override, dt_override):
+              if ov:
+                  ov_name = ov[:-4] if ov.endswith(".git") else ov
+                  key = ov_name.rsplit("/", 1)[1]
+                  key = key[len(prefix):] if key.startswith(prefix) else key
+                  overrides[key] = ov
+
+          for sib in sorted(needed):
+              dest = os.path.join(kroot, sib)
+              if os.path.exists(dest):
+                  print(f"已存在，跳过: {sib}")
+                  continue
+              url = overrides.get(sib) or f"{base_dir}/{prefix}{sib}.git"
+              print(f"克隆同级仓库 {sib} <- {url} (branch {kbranch})")
+              rc = subprocess.call(["git", "clone", "--depth=1", "-b", kbranch, url, dest])
+              if rc != 0:
+                  print(f"::warning::无法克隆同级仓库 {sib}（{url}）。相关厂商驱动引用稍后会被清理步骤剥离。")
+          PY
 
       - name: 解析并下载 Clang 工具链
         shell: bash
@@ -439,12 +516,30 @@ jobs:
                   else:
                       print("::warning::namespace.c 缺少插入锚点，无法自动移植 SUS_MOUNT 声明块")
 
+          # susfs_def.h 使用 test_thread_flag()/current_uid() 等，但未自带对应头文件；当它被
+          # 提前包含（例如 fs/susfs.c 顶部）时会触发隐式声明错误。使其自包含。
+          susfs_def = root / "include" / "linux" / "susfs_def.h"
+          if susfs_def.exists():
+              d_text = susfs_def.read_text(errors="ignore")
+              if "linux/thread_info.h" not in d_text:
+                  guard = "#define KSU_SUSFS_DEF_H\n"
+                  extra = (
+                      "#include <linux/thread_info.h>\n"
+                      "#include <linux/cred.h>\n"
+                      "#include <linux/sched.h>\n"
+                  )
+                  d_text = d_text.replace(guard, guard + extra, 1) if guard in d_text else extra + d_text
+                  susfs_def.write_text(d_text)
+                  print("已使 susfs_def.h 自包含（thread_info/cred/sched）")
+
           include_line = "#include <linux/susfs_def.h>\n"
           macro_re = re.compile(r'\bSUSFS_IS_INODE_|\bsusfs_is_current_proc_')
           fixed = 0
           for c in root.rglob("*.c"):
               parts = c.relative_to(root).parts
               if parts and parts[0] in {"out", ".git"}:
+                  continue
+              if c.name.startswith("susfs"):
                   continue
               try:
                   text = c.read_text(errors="ignore")
@@ -731,23 +826,42 @@ jobs:
           print(f"已注入 {path} 的 KPM Kconfig 符号")
           PY
 
-      - name: 清理缺失的 Kconfig source 引用（厂商树兼容）
+      - name: 清理缺失的厂商引用（Kconfig / Makefile / 悬空符号链接）
         shell: bash
         run: |
           set -euo pipefail
+          # 此步骤在克隆同级厂商仓库之后运行：能被同级仓库解析的引用会保留，
+          # 只有真正缺失（未同步）的目录/文件引用才会被剥离，避免独立构建 GKI Image 失败。
           python3 - "$SOURCE_COMMON_ROOT" <<'PY'
-          import sys
-          import re
+          import sys, os, re
           from pathlib import Path
 
           root = Path(sys.argv[1])
-          src_re = re.compile(r'^(\s*)source\s+"([^"]+)"\s*$')
-          stripped = 0
-          for kc in root.rglob("Kconfig*"):
-              if not kc.is_file():
+          SKIP_TOP = {"out", ".git"}
+
+          def skip(relparts):
+              return bool(relparts) and relparts[0] in SKIP_TOP
+
+          # 1) 移除悬空符号链接（目标不存在），避免 Kbuild 进入未同步的厂商目录
+          removed_links = 0
+          for dirpath, dirs, files in os.walk(root):
+              rel = os.path.relpath(dirpath, root)
+              top = "" if rel == "." else rel.split(os.sep)[0]
+              if top in SKIP_TOP:
+                  dirs[:] = []
                   continue
-              parts = kc.relative_to(root).parts
-              if parts and parts[0] in {"out", ".git"}:
+              for name in list(dirs) + list(files):
+                  p = os.path.join(dirpath, name)
+                  if os.path.islink(p) and not os.path.exists(p):
+                      os.unlink(p)
+                      removed_links += 1
+          print(f"已移除 {removed_links} 个悬空符号链接")
+
+          # 2) 注释 Kconfig 中指向缺失文件的 source 引用
+          src_re = re.compile(r'^(\s*)source\s+"([^"]+)"\s*$')
+          kconfig_stripped = 0
+          for kc in root.rglob("Kconfig*"):
+              if not kc.is_file() or skip(kc.relative_to(root).parts):
                   continue
               try:
                   lines = kc.read_text(errors="ignore").splitlines(keepends=True)
@@ -756,18 +870,61 @@ jobs:
               changed = False
               for i, line in enumerate(lines):
                   m = src_re.match(line)
-                  if not m:
+                  if not m or "$" in m.group(2):
                       continue
-                  target = m.group(2)
-                  if "$" in target:
-                      continue
-                  if not (root / target).exists():
-                      lines[i] = m.group(1) + '# ABK stripped missing source "' + target + '"\n'
+                  if not (root / m.group(2)).exists():
+                      lines[i] = m.group(1) + '# ABK stripped missing source "' + m.group(2) + '"\n'
                       changed = True
-                      stripped += 1
+                      kconfig_stripped += 1
               if changed:
                   kc.write_text("".join(lines))
-          print(f"已注释 {stripped} 处指向缺失文件的 Kconfig source 引用")
+          print(f"已注释 {kconfig_stripped} 处指向缺失文件的 Kconfig source 引用")
+
+          # 3) 剥离 Makefile/Kbuild 中指向缺失子目录（无 Makefile/Kbuild）的构建引用
+          assign_re = re.compile(r'^(\s*)([\w$()+-]+)\s*([:+]?=)\s*(.*)$')
+
+          def buildable(base, token):
+              d = base / token
+              return (d / "Makefile").exists() or (d / "Kbuild").exists()
+
+          makefile_stripped = 0
+          mkfiles = list(root.rglob("Makefile")) + list(root.rglob("Kbuild"))
+          for mk in mkfiles:
+              if not mk.is_file() or skip(mk.relative_to(root).parts):
+                  continue
+              base = mk.parent
+              try:
+                  lines = mk.read_text(errors="ignore").splitlines(keepends=True)
+              except Exception:
+                  continue
+              changed = False
+              for i, line in enumerate(lines):
+                  raw = line.rstrip("\n")
+                  if raw.endswith("\\"):
+                      continue
+                  m = assign_re.match(raw)
+                  if not m:
+                      continue
+                  lhs = m.group(2)
+                  if not (lhs.startswith("obj-") or lhs.endswith(("-y", "-m", "-objs"))):
+                      continue
+                  tokens = m.group(4).split()
+                  keep, dropped = [], False
+                  for tok in tokens:
+                      if tok.endswith("/") and "$" not in tok and not buildable(base, tok[:-1]):
+                          dropped = True
+                          makefile_stripped += 1
+                          continue
+                      keep.append(tok)
+                  if dropped:
+                      if keep:
+                          lines[i] = f"{m.group(1)}{lhs} {m.group(3)} {' '.join(keep)}\n"
+                      else:
+                          lines[i] = m.group(1) + "# ABK stripped missing subdir: " + raw.strip() + "\n"
+                      changed = True
+              if changed:
+                  mk.write_text("".join(lines))
+          print(f"已剥离 {makefile_stripped} 处指向缺失子目录的 Makefile/Kbuild 构建引用")
           PY
 
       - name: 配置 defconfig
