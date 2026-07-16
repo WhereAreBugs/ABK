@@ -24,10 +24,6 @@ on:
         required: false
         type: string
         default: "master-kernel-build-2022"
-      localversion:
-        required: false
-        type: string
-        default: ""
       extra_config_fragment:
         required: false
         type: string
@@ -72,7 +68,6 @@ jobs:
       KMI: ${{ inputs.kmi }}
       CLANG_VERSION_INPUT: ${{ inputs.clang_version }}
       CLANG_BRANCH: ${{ inputs.clang_branch }}
-      LOCALVERSION: ${{ inputs.localversion }}
       EXTRA_CONFIG_FRAGMENT: ${{ inputs.extra_config_fragment }}
       KERNEL_MODULES_REPO: ${{ inputs.kernel_modules_repo }}
       KERNEL_DEVICETREES_REPO: ${{ inputs.kernel_devicetrees_repo }}
@@ -143,7 +138,7 @@ jobs:
           echo "KMI 组合      : $KMI"
           echo "Android 版本  : $ANDROID_VERSION"
           echo "内核版本      : $KERNEL_VERSION"
-          echo "本地版本号    : ${LOCALVERSION:-（沿用源码）}"
+          echo "版本标识      : 沿用源码"
           echo "额外配置片段  : ${EXTRA_CONFIG_FRAGMENT:-无}"
           echo "KSU 变体      : $KSU_VARIANT"
           echo "SUSFS 状态    : $effective_susfs"
@@ -224,9 +219,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git config --global user.name "abk-builder"
-          git config --global user.email "abk-builder@users.noreply.github.com"
-
           WORKSPACE="$GITHUB_WORKSPACE/source_workspace"
           KERNEL_ROOT="$WORKSPACE/kernel_workspace/kernel_platform"
           COMMON_ROOT="$KERNEL_ROOT/common"
@@ -239,14 +231,6 @@ jobs:
             echo "::error::克隆的仓库不是可识别的 GKI 内核树（缺少 Makefile 或 arch/arm64/configs/gki_defconfig）。"
             exit 1
           fi
-
-          rm -f "$COMMON_ROOT"/android/abi_gki_protected_exports_* || true
-          for script in \
-            "$COMMON_ROOT/scripts/setlocalversion" \
-            "$COMMON_ROOT/external/dtc/scripts/setlocalversion"; do
-            [ -f "$script" ] || continue
-            sed -i 's/ -dirty//g' "$script"
-          done
 
           MK_VERSION="$(awk -F' = ' '/^VERSION = /{print $2}' "$COMMON_ROOT/Makefile")"
           MK_PATCHLEVEL="$(awk -F' = ' '/^PATCHLEVEL = /{print $2}' "$COMMON_ROOT/Makefile")"
@@ -826,109 +810,16 @@ jobs:
           print(f"已注入 {path} 的 KPM Kconfig 符号")
           PY
 
-      - name: 清理缺失的厂商引用（Kconfig / Makefile / 悬空符号链接）
+      - name: 校验厂商源码引用完整性
         shell: bash
         run: |
           set -euo pipefail
-          # 此步骤在克隆同级厂商仓库之后运行：能被同级仓库解析的引用会保留，
-          # 只有真正缺失（未同步）的目录/文件引用才会被剥离，避免独立构建 GKI Image 失败。
-          python3 - "$SOURCE_COMMON_ROOT" <<'PY'
-          import sys, os, re
-          from pathlib import Path
-
-          root = Path(sys.argv[1])
-          SKIP_TOP = {"out", ".git"}
-
-          def skip(relparts):
-              return bool(relparts) and relparts[0] in SKIP_TOP
-
-          # 1) 移除悬空符号链接（目标不存在），避免 Kbuild 进入未同步的厂商目录
-          removed_links = 0
-          for dirpath, dirs, files in os.walk(root):
-              rel = os.path.relpath(dirpath, root)
-              top = "" if rel == "." else rel.split(os.sep)[0]
-              if top in SKIP_TOP:
-                  dirs[:] = []
-                  continue
-              for name in list(dirs) + list(files):
-                  p = os.path.join(dirpath, name)
-                  if os.path.islink(p) and not os.path.exists(p):
-                      os.unlink(p)
-                      removed_links += 1
-          print(f"已移除 {removed_links} 个悬空符号链接")
-
-          # 2) 注释 Kconfig 中指向缺失文件的 source 引用
-          src_re = re.compile(r'^(\s*)source\s+"([^"]+)"\s*$')
-          kconfig_stripped = 0
-          for kc in root.rglob("Kconfig*"):
-              if not kc.is_file() or skip(kc.relative_to(root).parts):
-                  continue
-              try:
-                  lines = kc.read_text(errors="ignore").splitlines(keepends=True)
-              except Exception:
-                  continue
-              changed = False
-              for i, line in enumerate(lines):
-                  m = src_re.match(line)
-                  if not m or "$" in m.group(2):
-                      continue
-                  if not (root / m.group(2)).exists():
-                      lines[i] = m.group(1) + '# ABK stripped missing source "' + m.group(2) + '"\n'
-                      changed = True
-                      kconfig_stripped += 1
-              if changed:
-                  kc.write_text("".join(lines))
-          print(f"已注释 {kconfig_stripped} 处指向缺失文件的 Kconfig source 引用")
-
-          # 3) 剥离 Makefile/Kbuild 中指向缺失子目录（无 Makefile/Kbuild）的构建引用
-          assign_re = re.compile(r'^(\s*)([\w$()+-]+)\s*([:+]?=)\s*(.*)$')
-
-          def buildable(base, token):
-              d = base / token
-              return (d / "Makefile").exists() or (d / "Kbuild").exists()
-
-          makefile_stripped = 0
-          mkfiles = list(root.rglob("Makefile")) + list(root.rglob("Kbuild"))
-          for mk in mkfiles:
-              if not mk.is_file() or skip(mk.relative_to(root).parts):
-                  continue
-              base = mk.parent
-              try:
-                  lines = mk.read_text(errors="ignore").splitlines(keepends=True)
-              except Exception:
-                  continue
-              changed = False
-              for i, line in enumerate(lines):
-                  raw = line.rstrip("\n")
-                  if raw.endswith("\\"):
-                      continue
-                  m = assign_re.match(raw)
-                  if not m:
-                      continue
-                  lhs = m.group(2)
-                  # 仅处理 obj-* 列表：其子目录路径相对本 Makefile 目录。
-                  # core-y/libs-y/drivers-y/virt-y 等的路径相对内核根目录，语义不同，
-                  # 且属于核心构建管线（如 arch/arm64/lib/），绝不能在此处理。
-                  if not lhs.startswith("obj-"):
-                      continue
-                  tokens = m.group(4).split()
-                  keep, dropped = [], False
-                  for tok in tokens:
-                      if tok.endswith("/") and "$" not in tok and not buildable(base, tok[:-1]):
-                          dropped = True
-                          makefile_stripped += 1
-                          continue
-                      keep.append(tok)
-                  if dropped:
-                      if keep:
-                          lines[i] = f"{m.group(1)}{lhs} {m.group(3)} {' '.join(keep)}\n"
-                      else:
-                          lines[i] = m.group(1) + "# ABK stripped missing subdir: " + raw.strip() + "\n"
-                      changed = True
-              if changed:
-                  mk.write_text("".join(lines))
-          print(f"已剥离 {makefile_stripped} 处指向缺失子目录的 Makefile/Kbuild 构建引用")
-          PY
+          broken_links="$(find "$SOURCE_COMMON_ROOT" -xtype l -print -quit)"
+          if [ -n "$broken_links" ]; then
+            echo "::error::厂商内核树存在未解析的符号链接：$broken_links"
+            echo "::error::请提供对应的 modules/devicetrees 仓库；工作流不会删除引用后继续构建。"
+            exit 1
+          fi
 
       - name: 配置 defconfig
         shell: bash
@@ -936,11 +827,12 @@ jobs:
           set -euo pipefail
           KERNEL_ROOT="$SOURCE_KERNEL_ROOT"
           COMMON_ROOT="$SOURCE_COMMON_ROOT"
-          DEFCONFIG_PATH="$COMMON_ROOT/arch/arm64/configs/gki_defconfig"
+          SOURCE_DEFCONFIG="source_gki_defconfig"
+          DEFCONFIG_PATH="$COMMON_ROOT/arch/arm64/configs/$SOURCE_DEFCONFIG"
           kpm_kconfig_status="${ABK_KPM_KCONFIG_STATUS:-unknown}"
           kpm_kconfig_ready="${ABK_KPM_KCONFIG_READY:-false}"
           kpm_kconfig_path="${ABK_KPM_KCONFIG_PATH:-}"
-          test -f "$DEFCONFIG_PATH"
+          cp "$COMMON_ROOT/arch/arm64/configs/gki_defconfig" "$DEFCONFIG_PATH"
 
           if [ -n "$EXTRA_CONFIG_FRAGMENT" ]; then
             IFS=',' read -r -a fragments <<< "$EXTRA_CONFIG_FRAGMENT"
@@ -950,10 +842,12 @@ jobs:
               frag_path="$COMMON_ROOT/arch/arm64/configs/$fragment"
               if [ -f "$frag_path" ]; then
                 echo "合并额外配置片段: $fragment"
-                echo "" >> "$DEFCONFIG_PATH"
-                cat "$frag_path" >> "$DEFCONFIG_PATH"
+                KCONFIG_CONFIG="$DEFCONFIG_PATH" \
+                  "$COMMON_ROOT/scripts/kconfig/merge_config.sh" -m -r -y \
+                  "$DEFCONFIG_PATH" "$frag_path"
               else
-                echo "::warning::未找到额外配置片段: $fragment（跳过）"
+                echo "::error::未找到额外配置片段: $fragment"
+                exit 1
               fi
             done
           fi
@@ -992,45 +886,6 @@ jobs:
           CONFIG_TMPFS_POSIX_ACL=y
           CONFIG_HEADERS_INSTALL=n
           EOF
-
-          # OPlus sensor is linked into vmlinux by default in some vendor trees,
-          # but its Kconfig does not select the two providers it calls directly.
-          sensor_devinfo="$COMMON_ROOT/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c"
-          if [ -f "$sensor_devinfo" ]; then
-            if grep -qw 'qcom_smem_alloc' "$sensor_devinfo"; then
-              echo 'CONFIG_QCOM_SMEM=y' >> "$DEFCONFIG_PATH"
-              echo "已将 OPlus sensor 的 QCOM_SMEM provider 编入内核。"
-            fi
-            if grep -qw 'get_project' "$sensor_devinfo"; then
-              project_dir="$COMMON_ROOT/drivers/soc/oplus/boot/oplus_project"
-              project_makefile="$project_dir/Makefile"
-              project_gki_source="$project_dir/gki/oplus_project.c"
-              if [ ! -f "$project_makefile" ] || [ ! -f "$project_gki_source" ]; then
-                echo "::error::OPlus sensor 调用了 get_project，但源码树缺少 GKI project provider。"
-                exit 1
-              fi
-
-              # Vendor Kbuild selects the legacy qcom implementation for =y and
-              # the API-compatible GKI implementation for =m. Since the sensor is
-              # built into vmlinux, select the GKI implementation for =y as well.
-              sed -i 's#qcom/oplus_project\.o#gki/oplus_project.o#g' "$project_makefile"
-              if grep -q 'qcom/oplus_project\.o' "$project_makefile"; then
-                echo "::error::无法将内建 OPROJECT 切换到 GKI provider。"
-                exit 1
-              fi
-              sed -i \
-                's/LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)/LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)/g' \
-                "$project_gki_source"
-
-              cat >> "$DEFCONFIG_PATH" <<'EOF'
-          CONFIG_OPLUS_FEATURE_OPROJECT=y
-          CONFIG_OPLUS_FEATURE_CMDLINE=y
-          CONFIG_OPLUS_FEATURE_OPLUSBOOT=y
-          CONFIG_OPLUS_FEATURE_BUILDVARIANT=y
-          EOF
-              echo "已将 OPlus sensor 的 GKI OPROJECT 及 cmdline providers 编入内核。"
-            fi
-          fi
 
           kpm_config_supported="false"
           if [ "$KSU_VARIANT" = "SukiSU" ] || [ "$KSU_VARIANT" = "ReSukiSU" ]; then
@@ -1073,43 +928,7 @@ jobs:
           EOF
           fi
 
-          if [ "$KERNEL_VERSION" = "6.1" ] || [ "$KERNEL_VERSION" = "6.6" ]; then
-            echo "CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y" >> "$DEFCONFIG_PATH"
-          fi
-
-          if [ "$KERNEL_VERSION" = "5.10" ] || [ "$KERNEL_VERSION" = "5.15" ]; then
-            sed -i 's/^CONFIG_LTO=n/CONFIG_LTO=y/' "$DEFCONFIG_PATH" || true
-            sed -i 's/^CONFIG_LTO_CLANG_FULL=y/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG_PATH" || true
-            sed -i 's/^CONFIG_LTO_CLANG_NONE=y/CONFIG_LTO_CLANG_THIN=y/' "$DEFCONFIG_PATH" || true
-            grep -q '^CONFIG_LTO_CLANG_THIN=y' "$DEFCONFIG_PATH" || echo 'CONFIG_LTO_CLANG_THIN=y' >> "$DEFCONFIG_PATH"
-          fi
-          sed -i 's/check_defconfig//' "$COMMON_ROOT/build.config.gki" || true
-
-      - name: 配置内核名称
-        if: ${{ inputs.localversion != '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          COMMON_ROOT="$SOURCE_COMMON_ROOT"
-          cd "$COMMON_ROOT"
-
-          SUFFIX="-${LOCALVERSION}"
-          echo "设置内核 localversion 后缀: $SUFFIX"
-
-          sed -i 's/ -dirty//g' scripts/setlocalversion || true
-          perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${SUFFIX}"'"/s' scripts/setlocalversion 2>/dev/null || true
-          sed -i "\$s|echo \"\$res\"|echo \"${SUFFIX}\"|" scripts/setlocalversion 2>/dev/null || true
-
-          DEFCONFIG_PATH="arch/arm64/configs/gki_defconfig"
-          if grep -q '^CONFIG_LOCALVERSION=' "$DEFCONFIG_PATH"; then
-            sed -i '/^CONFIG_LOCALVERSION=/ s/=.*/=""/' "$DEFCONFIG_PATH"
-          else
-            echo 'CONFIG_LOCALVERSION=""' >> "$DEFCONFIG_PATH"
-          fi
-          sed -i '/^CONFIG_LOCALVERSION_AUTO=/d' "$DEFCONFIG_PATH"
-          echo '# CONFIG_LOCALVERSION_AUTO is not set' >> "$DEFCONFIG_PATH"
-
-          echo "KERNEL_RELEASE=${KERNEL_RELEASE_BASE}${SUFFIX}" >> "$GITHUB_ENV"
+          echo "SOURCE_DEFCONFIG=$SOURCE_DEFCONFIG" >> "$GITHUB_ENV"
 
       - name: 编译内核
         shell: bash
@@ -1119,9 +938,6 @@ jobs:
           cd "$COMMON_ROOT"
 
           export PATH="/usr/lib/ccache:$CLANG_BIN:$PATH"
-          export KBUILD_BUILD_USER="abk"
-          export KBUILD_BUILD_HOST="abk"
-          export KBUILD_BUILD_VERSION=1
 
           MAKE_ARGS=(
             -j"$(nproc --all)"
@@ -1132,57 +948,8 @@ jobs:
             O=out
           )
 
-          make "${MAKE_ARGS[@]}" gki_defconfig
-
-          sensor_devinfo="$COMMON_ROOT/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c"
-          if [ -f "$sensor_devinfo" ]; then
-            required_providers=()
-            if grep -qw 'qcom_smem_alloc' "$sensor_devinfo"; then
-              required_providers+=(QCOM_SMEM)
-            fi
-            if grep -qw 'get_project' "$sensor_devinfo"; then
-              required_providers+=(
-                OPLUS_FEATURE_OPROJECT
-                OPLUS_FEATURE_CMDLINE
-                OPLUS_FEATURE_OPLUSBOOT
-                OPLUS_FEATURE_BUILDVARIANT
-              )
-            fi
-            for provider in "${required_providers[@]}"; do
-              if ! grep -q "^CONFIG_${provider}=y$" out/.config; then
-                echo "::error::OPlus sensor 依赖的 CONFIG_${provider} 未编入 vmlinux。"
-                exit 1
-              fi
-            done
-            echo "OPlus sensor 的 SMEM/OPROJECT provider 配置校验通过。"
-          fi
-
-          case "$KERNEL_VERSION" in
-            6.1|6.6)
-              make "${MAKE_ARGS[@]}" KCFLAGS+=-O2 all
-              ;;
-            *)
-              make "${MAKE_ARGS[@]}" all
-              ;;
-          esac
-
-          if [ -f "$sensor_devinfo" ]; then
-            required_symbols=()
-            if grep -qw 'qcom_smem_alloc' "$sensor_devinfo"; then
-              required_symbols+=(qcom_smem_alloc)
-            fi
-            if grep -qw 'get_project' "$sensor_devinfo"; then
-              required_symbols+=(get_project serial_no build_variant)
-            fi
-            for symbol in "${required_symbols[@]}"; do
-              if ! "$CLANG_BIN/llvm-nm" --defined-only out/vmlinux | \
-                  awk -v symbol="$symbol" '$3 == symbol { found = 1 } END { exit !found }'; then
-                echo "::error::链接完成的 vmlinux 中缺少 OPlus sensor provider: $symbol"
-                exit 1
-              fi
-            done
-            echo "vmlinux 已定义 OPlus sensor 及 GKI project 所需的全部 providers。"
-          fi
+          make "${MAKE_ARGS[@]}" "$SOURCE_DEFCONFIG"
+          make "${MAKE_ARGS[@]}" Image modules dtbs
           ccache -s
 
       - name: 打包 AnyKernel3

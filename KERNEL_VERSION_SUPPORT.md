@@ -130,9 +130,10 @@
 
 说明：
 
-- 该路径 `git clone` 指定内核仓库，按其 `build.config.constants` 自动选择 Clang，编译 GKI `Image` 并打包
-  AnyKernel3（仅替换 boot 内核 Image，设备保留自带 `vendor_dlkm`/DTB）。
+- 该路径 `git clone` 指定内核仓库，按其 `build.config.constants` 自动选择 Clang。它保留源码的版本标识、ABI
+  保护和厂商配置；缺少厂商模块或设备树依赖会失败，不会通过删改 Kconfig/Kbuild 产出不完整的镜像。
 - `kmi` 指真实 GKI KMI（例如 5.15 内核填 `android13-5.15`，与设备平台 Android 版本无关）。
-- `localversion` 用于设置 `uname -r` 后缀，例如源码 `5.15.208` + `localversion=android16-2026-05`
-  产出 `5.15.208-android16-2026-05`。
-- 若设备需要厂商 GKI 配置，`extra_config_fragment` 可填 `vendor/<soc>_GKI.config`（逗号分隔可多个）。
+- 默认 crDroid SM8550 配置会合并 `vendor/kalama_GKI.config`。其他设备应填写其源码原生的
+  `vendor/<soc>_GKI.config`（逗号分隔可多个）。
+- `raw-image-debug` 是裸 `Image`，仅用于调试或由工具重新打包；不要将它直接刷入 `boot` 分区。应刷写
+  对应的 AnyKernel3 包，或以同一 ROM 版本的原始 boot 镜像重新打包后再刷写。

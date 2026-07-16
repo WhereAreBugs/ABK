@@ -1,9 +1,6 @@
 import json
 import re
-import subprocess
 import sys
-import tempfile
-import textwrap
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -203,69 +200,28 @@ class WorkflowContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("python -m unittest discover -s cli/tests -v", workflow)
 
-    def test_source_kernel_cleanup_only_rewrites_relative_obj_lists(self):
-        """Run the cleanup script against root-relative arm64 Kbuild lists."""
+    def test_source_kernel_preserves_vendor_configuration(self):
+        """Custom source builds must not silently turn a vendor kernel into GKI-only."""
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "kernel-source-build.yml"
         ).read_text(encoding="utf-8")
 
-        step_start = workflow.index("- name: 清理缺失的厂商引用")
-        script_start = workflow.index("python3 - \"$SOURCE_COMMON_ROOT\" <<'PY'", step_start)
-        script_start = workflow.index("\n", script_start) + 1
-        script_end = workflow.index("\n          PY", script_start)
-        cleanup_script = textwrap.dedent(workflow[script_start:script_end])
+        self.assertIn("- name: 校验厂商源码引用完整性", workflow)
+        self.assertIn('find "$SOURCE_COMMON_ROOT" -xtype l -print -quit', workflow)
+        self.assertIn('scripts/kconfig/merge_config.sh" -m -r -y', workflow)
+        self.assertIn('make "${MAKE_ARGS[@]}" "$SOURCE_DEFCONFIG"', workflow)
+        self.assertIn('make "${MAKE_ARGS[@]}" Image modules dtbs', workflow)
+        self.assertNotIn("清理缺失的厂商引用", workflow)
+        self.assertNotIn("KBUILD_BUILD_USER", workflow)
+        self.assertNotIn("KBUILD_BUILD_HOST", workflow)
+        self.assertNotIn("abi_gki_protected_exports", workflow)
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
-            arm64 = root / "arch" / "arm64"
-            for directory in (
-                arm64 / "kernel",
-                arm64 / "mm",
-                arm64 / "lib",
-                arm64 / "valid",
-            ):
-                directory.mkdir(parents=True)
-                (directory / "Makefile").write_text("# fixture\n", encoding="utf-8")
-
-            arm64_makefile = arm64 / "Makefile"
-            arm64_makefile.write_text(
-                "core-y += arch/arm64/kernel/ arch/arm64/mm/\n"
-                "libs-y := arch/arm64/lib/\n"
-                "obj-y += valid/ missing/\n",
-                encoding="utf-8",
-            )
-
-            subprocess.run(
-                [sys.executable, "-", str(root)],
-                input=cleanup_script,
-                text=True,
-                check=True,
-                capture_output=True,
-            )
-
-            cleaned = arm64_makefile.read_text(encoding="utf-8")
-            self.assertIn("core-y += arch/arm64/kernel/ arch/arm64/mm/", cleaned)
-            self.assertIn("libs-y := arch/arm64/lib/", cleaned)
-            self.assertIn("obj-y += valid/", cleaned)
-            self.assertNotIn("missing/", cleaned)
-
-    def test_source_kernel_builds_oplus_sensor_symbol_providers(self):
-        workflow = (
-            REPO_ROOT / ".github" / "workflows" / "kernel-source-build.yml"
+        custom_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "kernel-source-custom.yml"
         ).read_text(encoding="utf-8")
-
-        self.assertIn("CONFIG_QCOM_SMEM=y", workflow)
-        self.assertIn("CONFIG_OPLUS_FEATURE_OPROJECT=y", workflow)
-        self.assertIn("CONFIG_OPLUS_FEATURE_CMDLINE=y", workflow)
-        self.assertIn("CONFIG_OPLUS_FEATURE_OPLUSBOOT=y", workflow)
-        self.assertIn("CONFIG_OPLUS_FEATURE_BUILDVARIANT=y", workflow)
-        self.assertIn("gki/oplus_project.o", workflow)
-        self.assertIn("qcom/oplus_project\\.o", workflow)
-        self.assertIn("KERNEL_VERSION(5, 10, 0)/g", workflow)
-        self.assertIn('make "${MAKE_ARGS[@]}" gki_defconfig', workflow)
-        self.assertIn('grep -q "^CONFIG_${provider}=y$" out/.config', workflow)
-        self.assertIn('"$CLANG_BIN/llvm-nm" --defined-only out/vmlinux', workflow)
-        self.assertNotIn("O=out gki_defconfig all", workflow)
+        self.assertIn('default: "vendor/kalama_GKI.config"', custom_workflow)
+        self.assertIn("default: None", custom_workflow)
+        self.assertNotIn("localversion:", custom_workflow)
 
     def test_cross_packaging_uses_fast_compatible_crypto_fallback(self):
         workflow = (

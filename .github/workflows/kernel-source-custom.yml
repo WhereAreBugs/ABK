@@ -30,17 +30,11 @@ on:
           - android16-6.12
         default: android13-5.15
 
-      # ==================== 内核命名 ====================
-      localversion:
-        description: "内核 localversion 后缀（uname -r 会显示 <版本>-<此值>）"
-        required: false
-        type: string
-        default: "android16-2026-05"
       extra_config_fragment:
-        description: "额外 defconfig 片段（相对 arch/arm64/configs，逗号分隔，如 vendor/kalama_GKI.config）"
+        description: "额外 defconfig 片段（相对 arch/arm64/configs，逗号分隔）"
         required: false
         type: string
-        default: ""
+        default: "vendor/kalama_GKI.config"
 
       # ==================== KernelSU 配置 ====================
       ksu_variant:
@@ -52,7 +46,7 @@ on:
           - SukiSU
           - Official
           - None
-        default: ReSukiSU
+        default: None
 
       # ==================== 功能开关 ====================
       enable_susfs:
@@ -74,7 +68,7 @@ on:
         description: "启用 BBG 基带防护"
         required: false
         type: boolean
-        default: true
+        default: false
 
 jobs:
   get-manager:
@@ -93,7 +87,6 @@ jobs:
       kernel_repo: ${{ inputs.kernel_repo }}
       kernel_branch: ${{ inputs.kernel_branch }}
       kmi: ${{ inputs.kmi }}
-      localversion: ${{ inputs.localversion || '' }}
       extra_config_fragment: ${{ inputs.extra_config_fragment || '' }}
       ksu_variant: ${{ inputs.ksu_variant }}
       enable_susfs: ${{ inputs.enable_susfs }}
