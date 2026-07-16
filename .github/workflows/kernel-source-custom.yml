@@ -1,0 +1,102 @@
+name: 自定义源码内核构建
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      # ==================== 内核源码配置 ====================
+      kernel_repo:
+        description: "内核源码 Git 仓库（完整 GKI 内核树，仓库根即 common）"
+        required: true
+        type: string
+        default: "https://github.com/crdroidandroid/android_kernel_oneplus_sm8550.git"
+      kernel_branch:
+        description: "内核源码分支 / 标签"
+        required: true
+        type: string
+        default: "16.0"
+      kmi:
+        description: "KMI 组合（决定内核版本、SUSFS 分支、默认 Clang、Hook 变体）"
+        required: true
+        type: choice
+        options:
+          - android12-5.10
+          - android13-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+        default: android13-5.15
+
+      # ==================== 内核命名 ====================
+      localversion:
+        description: "内核 localversion 后缀（uname -r 会显示 <版本>-<此值>）"
+        required: false
+        type: string
+        default: "android16-2026-05"
+      extra_config_fragment:
+        description: "额外 defconfig 片段（相对 arch/arm64/configs，逗号分隔，如 vendor/kalama_GKI.config）"
+        required: false
+        type: string
+        default: ""
+
+      # ==================== KernelSU 配置 ====================
+      ksu_variant:
+        description: "KernelSU 变体"
+        required: true
+        type: choice
+        options:
+          - ReSukiSU
+          - SukiSU
+          - Official
+          - None
+        default: ReSukiSU
+
+      # ==================== 功能开关 ====================
+      enable_susfs:
+        description: "启用 SUSFS（使用 susfs4ksu gki-<KMI> 分支）"
+        required: false
+        type: boolean
+        default: false
+      use_kpm:
+        description: "启用 KPM（仅 SukiSU/ReSukiSU）"
+        required: false
+        type: boolean
+        default: false
+      use_lz4kd:
+        description: "启用 lz4kd ZRAM 算法"
+        required: false
+        type: boolean
+        default: false
+      use_bbg:
+        description: "启用 BBG 基带防护"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  get-manager:
+    name: 上传管理器和 SUSFS 模块
+    if: ${{ inputs.ksu_variant != 'None' }}
+    uses: ./.github/workflows/get-manager.yml
+    secrets: inherit
+    with:
+      kernelsu_variant: ${{ inputs.ksu_variant }}
+
+  build-source-kernel:
+    name: "${{ inputs.kmi }}-${{ inputs.ksu_variant }}"
+    uses: ./.github/workflows/kernel-source-build.yml
+    secrets: inherit
+    with:
+      kernel_repo: ${{ inputs.kernel_repo }}
+      kernel_branch: ${{ inputs.kernel_branch }}
+      kmi: ${{ inputs.kmi }}
+      localversion: ${{ inputs.localversion || '' }}
+      extra_config_fragment: ${{ inputs.extra_config_fragment || '' }}
+      ksu_variant: ${{ inputs.ksu_variant }}
+      enable_susfs: ${{ inputs.enable_susfs }}
+      use_kpm: ${{ inputs.use_kpm }}
+      use_lz4kd: ${{ inputs.use_lz4kd }}
+      use_bbg: ${{ inputs.use_bbg }}
