@@ -906,7 +906,10 @@ jobs:
                   if not m:
                       continue
                   lhs = m.group(2)
-                  if not (lhs.startswith("obj-") or lhs.endswith(("-y", "-m", "-objs"))):
+                  # 仅处理 obj-* 列表：其子目录路径相对本 Makefile 目录。
+                  # core-y/libs-y/drivers-y/virt-y 等的路径相对内核根目录，语义不同，
+                  # 且属于核心构建管线（如 arch/arm64/lib/），绝不能在此处理。
+                  if not lhs.startswith("obj-"):
                       continue
                   tokens = m.group(4).split()
                   keep, dropped = [], False

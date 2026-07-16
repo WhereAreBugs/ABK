@@ -1,6 +1,9 @@
 import json
 import re
+import subprocess
 import sys
+import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -199,6 +202,52 @@ class WorkflowContractTests(unittest.TestCase):
             REPO_ROOT / ".github" / "workflows" / "build-abk-cli.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("python -m unittest discover -s cli/tests -v", workflow)
+
+    def test_source_kernel_cleanup_only_rewrites_relative_obj_lists(self):
+        """Run the cleanup script against root-relative arm64 Kbuild lists."""
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "kernel-source-build.yml"
+        ).read_text(encoding="utf-8")
+
+        step_start = workflow.index("- name: 清理缺失的厂商引用")
+        script_start = workflow.index("python3 - \"$SOURCE_COMMON_ROOT\" <<'PY'", step_start)
+        script_start = workflow.index("\n", script_start) + 1
+        script_end = workflow.index("\n          PY", script_start)
+        cleanup_script = textwrap.dedent(workflow[script_start:script_end])
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            arm64 = root / "arch" / "arm64"
+            for directory in (
+                arm64 / "kernel",
+                arm64 / "mm",
+                arm64 / "lib",
+                arm64 / "valid",
+            ):
+                directory.mkdir(parents=True)
+                (directory / "Makefile").write_text("# fixture\n", encoding="utf-8")
+
+            arm64_makefile = arm64 / "Makefile"
+            arm64_makefile.write_text(
+                "core-y += arch/arm64/kernel/ arch/arm64/mm/\n"
+                "libs-y := arch/arm64/lib/\n"
+                "obj-y += valid/ missing/\n",
+                encoding="utf-8",
+            )
+
+            subprocess.run(
+                [sys.executable, "-", str(root)],
+                input=cleanup_script,
+                text=True,
+                check=True,
+                capture_output=True,
+            )
+
+            cleaned = arm64_makefile.read_text(encoding="utf-8")
+            self.assertIn("core-y += arch/arm64/kernel/ arch/arm64/mm/", cleaned)
+            self.assertIn("libs-y := arch/arm64/lib/", cleaned)
+            self.assertIn("obj-y += valid/", cleaned)
+            self.assertNotIn("missing/", cleaned)
 
     def test_cross_packaging_uses_fast_compatible_crypto_fallback(self):
         workflow = (
