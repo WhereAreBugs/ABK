@@ -249,6 +249,18 @@ class WorkflowContractTests(unittest.TestCase):
             self.assertIn("obj-y += valid/", cleaned)
             self.assertNotIn("missing/", cleaned)
 
+    def test_source_kernel_builds_oplus_sensor_symbol_providers(self):
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "kernel-source-build.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("CONFIG_QCOM_SMEM=y", workflow)
+        self.assertIn("CONFIG_OPLUS_FEATURE_OPROJECT=y", workflow)
+        self.assertIn('make "${MAKE_ARGS[@]}" gki_defconfig', workflow)
+        self.assertIn('grep -q "^CONFIG_${provider}=y$" out/.config', workflow)
+        self.assertIn('"$CLANG_BIN/llvm-nm" --defined-only out/vmlinux', workflow)
+        self.assertNotIn("O=out gki_defconfig all", workflow)
+
     def test_cross_packaging_uses_fast_compatible_crypto_fallback(self):
         workflow = (
             REPO_ROOT / ".github" / "workflows" / "build-abk-cli.yml"

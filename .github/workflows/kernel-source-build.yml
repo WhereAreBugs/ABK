@@ -993,6 +993,20 @@ jobs:
           CONFIG_HEADERS_INSTALL=n
           EOF
 
+          # OPlus sensor is linked into vmlinux by default in some vendor trees,
+          # but its Kconfig does not select the two providers it calls directly.
+          sensor_devinfo="$COMMON_ROOT/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c"
+          if [ -f "$sensor_devinfo" ]; then
+            if grep -qw 'qcom_smem_alloc' "$sensor_devinfo"; then
+              echo 'CONFIG_QCOM_SMEM=y' >> "$DEFCONFIG_PATH"
+              echo "已将 OPlus sensor 的 QCOM_SMEM provider 编入内核。"
+            fi
+            if grep -qw 'get_project' "$sensor_devinfo"; then
+              echo 'CONFIG_OPLUS_FEATURE_OPROJECT=y' >> "$DEFCONFIG_PATH"
+              echo "已将 OPlus sensor 的 OPROJECT provider 编入内核。"
+            fi
+          fi
+
           kpm_config_supported="false"
           if [ "$KSU_VARIANT" = "SukiSU" ] || [ "$KSU_VARIANT" = "ReSukiSU" ]; then
             if [ "$kpm_kconfig_ready" = "true" ] && [ -f "$kpm_kconfig_path" ]; then
@@ -1090,16 +1104,46 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CC="ccache clang"
             LD=ld.lld HOSTLD=ld.lld
-            O=out gki_defconfig all
+            O=out
           )
+
+          make "${MAKE_ARGS[@]}" gki_defconfig
+
+          sensor_devinfo="$COMMON_ROOT/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c"
+          if [ -f "$sensor_devinfo" ]; then
+            for requirement in \
+              qcom_smem_alloc:QCOM_SMEM \
+              get_project:OPLUS_FEATURE_OPROJECT; do
+              symbol="${requirement%%:*}"
+              provider="${requirement##*:}"
+              grep -qw "$symbol" "$sensor_devinfo" || continue
+              if ! grep -q "^CONFIG_${provider}=y$" out/.config; then
+                echo "::error::OPlus sensor 依赖的 CONFIG_${provider} 未编入 vmlinux。"
+                exit 1
+              fi
+            done
+            echo "OPlus sensor 的 SMEM/OPROJECT provider 配置校验通过。"
+          fi
+
           case "$KERNEL_VERSION" in
             6.1|6.6)
-              make "${MAKE_ARGS[@]}" KCFLAGS+=-O2
+              make "${MAKE_ARGS[@]}" KCFLAGS+=-O2 all
               ;;
             *)
-              make "${MAKE_ARGS[@]}"
+              make "${MAKE_ARGS[@]}" all
               ;;
           esac
+
+          if [ -f "$sensor_devinfo" ]; then
+            for symbol in qcom_smem_alloc get_project; do
+              if ! "$CLANG_BIN/llvm-nm" --defined-only out/vmlinux | \
+                  awk -v symbol="$symbol" '$3 == symbol { found = 1 } END { exit !found }'; then
+                echo "::error::链接完成的 vmlinux 中缺少 OPlus sensor provider: $symbol"
+                exit 1
+              fi
+            done
+            echo "vmlinux 已定义 OPlus sensor 所需的 qcom_smem_alloc/get_project。"
+          fi
           ccache -s
 
       - name: 打包 AnyKernel3
