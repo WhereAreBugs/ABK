@@ -256,6 +256,11 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertIn("CONFIG_QCOM_SMEM=y", workflow)
         self.assertIn("CONFIG_OPLUS_FEATURE_OPROJECT=y", workflow)
+        self.assertIn("CONFIG_OPLUS_FEATURE_OPLUSBOOT=y", workflow)
+        self.assertIn("CONFIG_OPLUS_FEATURE_BUILDVARIANT=y", workflow)
+        self.assertIn("gki/oplus_project.o", workflow)
+        self.assertIn("qcom/oplus_project\\.o", workflow)
+        self.assertIn("KERNEL_VERSION(5, 10, 0)/g", workflow)
         self.assertIn('make "${MAKE_ARGS[@]}" gki_defconfig', workflow)
         self.assertIn('grep -q "^CONFIG_${provider}=y$" out/.config', workflow)
         self.assertIn('"$CLANG_BIN/llvm-nm" --defined-only out/vmlinux', workflow)

@@ -1002,8 +1002,32 @@ jobs:
               echo "已将 OPlus sensor 的 QCOM_SMEM provider 编入内核。"
             fi
             if grep -qw 'get_project' "$sensor_devinfo"; then
-              echo 'CONFIG_OPLUS_FEATURE_OPROJECT=y' >> "$DEFCONFIG_PATH"
-              echo "已将 OPlus sensor 的 OPROJECT provider 编入内核。"
+              project_dir="$COMMON_ROOT/drivers/soc/oplus/boot/oplus_project"
+              project_makefile="$project_dir/Makefile"
+              project_gki_source="$project_dir/gki/oplus_project.c"
+              if [ ! -f "$project_makefile" ] || [ ! -f "$project_gki_source" ]; then
+                echo "::error::OPlus sensor 调用了 get_project，但源码树缺少 GKI project provider。"
+                exit 1
+              fi
+
+              # Vendor Kbuild selects the legacy qcom implementation for =y and
+              # the API-compatible GKI implementation for =m. Since the sensor is
+              # built into vmlinux, select the GKI implementation for =y as well.
+              sed -i 's#qcom/oplus_project\.o#gki/oplus_project.o#g' "$project_makefile"
+              if grep -q 'qcom/oplus_project\.o' "$project_makefile"; then
+                echo "::error::无法将内建 OPROJECT 切换到 GKI provider。"
+                exit 1
+              fi
+              sed -i \
+                's/LINUX_VERSION_CODE < KERNEL_VERSION(5, 15, 0)/LINUX_VERSION_CODE < KERNEL_VERSION(5, 10, 0)/g' \
+                "$project_gki_source"
+
+              cat >> "$DEFCONFIG_PATH" <<'EOF'
+          CONFIG_OPLUS_FEATURE_OPROJECT=y
+          CONFIG_OPLUS_FEATURE_OPLUSBOOT=y
+          CONFIG_OPLUS_FEATURE_BUILDVARIANT=y
+          EOF
+              echo "已将 OPlus sensor 的 GKI OPROJECT 及 cmdline providers 编入内核。"
             fi
           fi
 
@@ -1111,12 +1135,18 @@ jobs:
 
           sensor_devinfo="$COMMON_ROOT/drivers/soc/oplus/sensor/oplus_sensor_devinfo.c"
           if [ -f "$sensor_devinfo" ]; then
-            for requirement in \
-              qcom_smem_alloc:QCOM_SMEM \
-              get_project:OPLUS_FEATURE_OPROJECT; do
-              symbol="${requirement%%:*}"
-              provider="${requirement##*:}"
-              grep -qw "$symbol" "$sensor_devinfo" || continue
+            required_providers=()
+            if grep -qw 'qcom_smem_alloc' "$sensor_devinfo"; then
+              required_providers+=(QCOM_SMEM)
+            fi
+            if grep -qw 'get_project' "$sensor_devinfo"; then
+              required_providers+=(
+                OPLUS_FEATURE_OPROJECT
+                OPLUS_FEATURE_OPLUSBOOT
+                OPLUS_FEATURE_BUILDVARIANT
+              )
+            fi
+            for provider in "${required_providers[@]}"; do
               if ! grep -q "^CONFIG_${provider}=y$" out/.config; then
                 echo "::error::OPlus sensor 依赖的 CONFIG_${provider} 未编入 vmlinux。"
                 exit 1
@@ -1135,14 +1165,21 @@ jobs:
           esac
 
           if [ -f "$sensor_devinfo" ]; then
-            for symbol in qcom_smem_alloc get_project; do
+            required_symbols=()
+            if grep -qw 'qcom_smem_alloc' "$sensor_devinfo"; then
+              required_symbols+=(qcom_smem_alloc)
+            fi
+            if grep -qw 'get_project' "$sensor_devinfo"; then
+              required_symbols+=(get_project serial_no build_variant)
+            fi
+            for symbol in "${required_symbols[@]}"; do
               if ! "$CLANG_BIN/llvm-nm" --defined-only out/vmlinux | \
                   awk -v symbol="$symbol" '$3 == symbol { found = 1 } END { exit !found }'; then
                 echo "::error::链接完成的 vmlinux 中缺少 OPlus sensor provider: $symbol"
                 exit 1
               fi
             done
-            echo "vmlinux 已定义 OPlus sensor 所需的 qcom_smem_alloc/get_project。"
+            echo "vmlinux 已定义 OPlus sensor 及 GKI project 所需的全部 providers。"
           fi
           ccache -s
 
