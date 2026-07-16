@@ -139,3 +139,4 @@
   `android_kernel_oneplus_sm8550-devicetrees` 的同名分支；如使用其他源码或分支，请在工作流中改为匹配的仓库。
 - `raw-image-debug` 是裸 `Image`，仅用于调试或由工具重新打包；不要将它直接刷入 `boot` 分区。应刷写
   对应的 AnyKernel3 包，或以同一 ROM 版本的原始 boot 镜像重新打包后再刷写。
+- 该工作流不重建或刷写 DTB/DTBO；它保留当前 ROM 的设备树，仅替换 boot 中的内核 `Image`。

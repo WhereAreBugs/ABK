@@ -954,7 +954,9 @@ jobs:
           )
 
           make "${MAKE_ARGS[@]}" "$SOURCE_DEFCONFIG"
-          make "${MAKE_ARGS[@]}" Image modules dtbs
+          # AnyKernel3 only replaces the boot Image. DTB/DTBO remain those from the
+          # installed ROM, so do not compile every vendor device-tree variant here.
+          make "${MAKE_ARGS[@]}" Image modules
           ccache -s
 
       - name: 打包 AnyKernel3
