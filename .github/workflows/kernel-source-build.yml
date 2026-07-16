@@ -398,6 +398,47 @@ jobs:
           import sys, re
           from pathlib import Path
           root = Path(sys.argv[1])
+
+          # fs/namespace.c 的 SUS_MOUNT 声明块（include + extern + CL_COPY_MNT_NS 宏）是纯新增，
+          # 但 stock hunk 依赖头部 include 上下文；厂商树常在此处新增 include 导致该 hunk reject，
+          # 而后续 susfs 挂载逻辑 hunk 仍会带偏移应用。此处在稳定锚点后补齐声明并清除对应 .rej。
+          ns = root / "fs" / "namespace.c"
+          if ns.exists():
+              ns_text = ns.read_text(errors="ignore")
+              if "susfs_is_current_ksu_domain(" in ns_text \
+                      and "extern bool susfs_is_current_ksu_domain(void);" not in ns_text:
+                  inc_anchor = "#include <linux/mnt_idmapping.h>\n"
+                  decl_anchor = '#include "internal.h"\n'
+                  if inc_anchor in ns_text and decl_anchor in ns_text:
+                      ns_text = ns_text.replace(
+                          inc_anchor,
+                          inc_anchor
+                          + "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+                          + "#include <linux/susfs_def.h>\n"
+                          + "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n",
+                          1,
+                      )
+                      ns_text = ns_text.replace(
+                          decl_anchor,
+                          decl_anchor
+                          + "#ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n"
+                          + "extern bool susfs_is_current_ksu_domain(void);\n"
+                          + "extern struct static_key_true susfs_is_sdcard_android_data_not_decrypted;\n"
+                          + "\n"
+                          + "#define CL_COPY_MNT_NS BIT(25) /* used by copy_mnt_ns() */\n"
+                          + "\n"
+                          + "#endif // #ifdef CONFIG_KSU_SUSFS_SUS_MOUNT\n",
+                          1,
+                      )
+                      ns.write_text(ns_text)
+                      print("已移植 namespace.c 的 SUSFS SUS_MOUNT 声明块")
+                      rej = root / "fs" / "namespace.c.rej"
+                      if rej.exists():
+                          rej.unlink()
+                          print("已清除 namespace.c.rej（声明块已手动移植）")
+                  else:
+                      print("::warning::namespace.c 缺少插入锚点，无法自动移植 SUS_MOUNT 声明块")
+
           include_line = "#include <linux/susfs_def.h>\n"
           macro_re = re.compile(r'\bSUSFS_IS_INODE_|\bsusfs_is_current_proc_')
           fixed = 0
