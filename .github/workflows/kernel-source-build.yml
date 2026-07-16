@@ -270,7 +270,7 @@ jobs:
                   if not os.path.islink(p):
                       continue
                   target = os.readlink(p)
-                  m = re.match(r'^((?:\.\./)+)([^/]+)/', target)
+                  m = re.match(r'^((?:\.\./)+)([^/]+)(?:/|$)', target)
                   if not m:
                       continue
                   ups = m.group(1).count('../')
