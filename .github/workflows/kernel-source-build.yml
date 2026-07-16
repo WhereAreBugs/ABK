@@ -1024,6 +1024,7 @@ jobs:
 
               cat >> "$DEFCONFIG_PATH" <<'EOF'
           CONFIG_OPLUS_FEATURE_OPROJECT=y
+          CONFIG_OPLUS_FEATURE_CMDLINE=y
           CONFIG_OPLUS_FEATURE_OPLUSBOOT=y
           CONFIG_OPLUS_FEATURE_BUILDVARIANT=y
           EOF
@@ -1142,6 +1143,7 @@ jobs:
             if grep -qw 'get_project' "$sensor_devinfo"; then
               required_providers+=(
                 OPLUS_FEATURE_OPROJECT
+                OPLUS_FEATURE_CMDLINE
                 OPLUS_FEATURE_OPLUSBOOT
                 OPLUS_FEATURE_BUILDVARIANT
               )

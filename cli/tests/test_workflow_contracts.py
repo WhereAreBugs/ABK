@@ -256,6 +256,7 @@ class WorkflowContractTests(unittest.TestCase):
 
         self.assertIn("CONFIG_QCOM_SMEM=y", workflow)
         self.assertIn("CONFIG_OPLUS_FEATURE_OPROJECT=y", workflow)
+        self.assertIn("CONFIG_OPLUS_FEATURE_CMDLINE=y", workflow)
         self.assertIn("CONFIG_OPLUS_FEATURE_OPLUSBOOT=y", workflow)
         self.assertIn("CONFIG_OPLUS_FEATURE_BUILDVARIANT=y", workflow)
         self.assertIn("gki/oplus_project.o", workflow)
