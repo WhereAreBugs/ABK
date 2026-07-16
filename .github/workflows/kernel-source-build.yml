@@ -309,7 +309,9 @@ jobs:
               print(f"克隆同级仓库 {sib} <- {url} (branch {kbranch})")
               rc = subprocess.call(["git", "clone", "--depth=1", "-b", kbranch, url, dest])
               if rc != 0:
-                  print(f"::warning::无法克隆同级仓库 {sib}（{url}）。相关厂商驱动引用稍后会被清理步骤剥离。")
+                  raise SystemExit(
+                      f"::error::无法克隆同级仓库 {sib}（{url}，branch {kbranch}）。"
+                  )
           PY
 
       - name: 解析并下载 Clang 工具链

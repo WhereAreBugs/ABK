@@ -35,6 +35,16 @@ on:
         required: false
         type: string
         default: "vendor/kalama_GKI.config"
+      kernel_modules_repo:
+        description: "厂商模块仓库（留空时按内核仓库名称推导）"
+        required: false
+        type: string
+        default: "https://github.com/crdroidandroid/android_kernel_oneplus_sm8550-modules.git"
+      kernel_devicetrees_repo:
+        description: "厂商设备树仓库（留空时按内核仓库名称推导）"
+        required: false
+        type: string
+        default: "https://github.com/crdroidandroid/android_kernel_oneplus_sm8550-devicetrees.git"
 
       # ==================== KernelSU 配置 ====================
       ksu_variant:
@@ -88,6 +98,8 @@ jobs:
       kernel_branch: ${{ inputs.kernel_branch }}
       kmi: ${{ inputs.kmi }}
       extra_config_fragment: ${{ inputs.extra_config_fragment || '' }}
+      kernel_modules_repo: ${{ inputs.kernel_modules_repo || '' }}
+      kernel_devicetrees_repo: ${{ inputs.kernel_devicetrees_repo || '' }}
       ksu_variant: ${{ inputs.ksu_variant }}
       enable_susfs: ${{ inputs.enable_susfs }}
       use_kpm: ${{ inputs.use_kpm }}

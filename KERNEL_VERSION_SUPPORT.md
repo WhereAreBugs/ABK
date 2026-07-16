@@ -135,5 +135,7 @@
 - `kmi` 指真实 GKI KMI（例如 5.15 内核填 `android13-5.15`，与设备平台 Android 版本无关）。
 - 默认 crDroid SM8550 配置会合并 `vendor/kalama_GKI.config`。其他设备应填写其源码原生的
   `vendor/<soc>_GKI.config`（逗号分隔可多个）。
+- 默认 crDroid SM8550 还会同步 `android_kernel_oneplus_sm8550-modules` 和
+  `android_kernel_oneplus_sm8550-devicetrees` 的同名分支；如使用其他源码或分支，请在工作流中改为匹配的仓库。
 - `raw-image-debug` 是裸 `Image`，仅用于调试或由工具重新打包；不要将它直接刷入 `boot` 分区。应刷写
   对应的 AnyKernel3 包，或以同一 ROM 版本的原始 boot 镜像重新打包后再刷写。

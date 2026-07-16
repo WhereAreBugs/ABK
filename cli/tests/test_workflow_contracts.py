@@ -220,6 +220,14 @@ class WorkflowContractTests(unittest.TestCase):
             REPO_ROOT / ".github" / "workflows" / "kernel-source-custom.yml"
         ).read_text(encoding="utf-8")
         self.assertIn('default: "vendor/kalama_GKI.config"', custom_workflow)
+        self.assertIn(
+            'default: "https://github.com/crdroidandroid/android_kernel_oneplus_sm8550-modules.git"',
+            custom_workflow,
+        )
+        self.assertIn(
+            'default: "https://github.com/crdroidandroid/android_kernel_oneplus_sm8550-devicetrees.git"',
+            custom_workflow,
+        )
         self.assertIn("default: None", custom_workflow)
         self.assertNotIn("localversion:", custom_workflow)
 
