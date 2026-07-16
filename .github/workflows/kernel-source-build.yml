@@ -642,6 +642,45 @@ jobs:
           print(f"已注入 {path} 的 KPM Kconfig 符号")
           PY
 
+      - name: 清理缺失的 Kconfig source 引用（厂商树兼容）
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$SOURCE_COMMON_ROOT" <<'PY'
+          import sys
+          import re
+          from pathlib import Path
+
+          root = Path(sys.argv[1])
+          src_re = re.compile(r'^(\s*)source\s+"([^"]+)"\s*$')
+          stripped = 0
+          for kc in root.rglob("Kconfig*"):
+              if not kc.is_file():
+                  continue
+              parts = kc.relative_to(root).parts
+              if parts and parts[0] in {"out", ".git"}:
+                  continue
+              try:
+                  lines = kc.read_text(errors="ignore").splitlines(keepends=True)
+              except Exception:
+                  continue
+              changed = False
+              for i, line in enumerate(lines):
+                  m = src_re.match(line)
+                  if not m:
+                      continue
+                  target = m.group(2)
+                  if "$" in target:
+                      continue
+                  if not (root / target).exists():
+                      lines[i] = m.group(1) + '# ABK stripped missing source "' + target + '"\n'
+                      changed = True
+                      stripped += 1
+              if changed:
+                  kc.write_text("".join(lines))
+          print(f"已注释 {stripped} 处指向缺失文件的 Kconfig source 引用")
+          PY
+
       - name: 配置 defconfig
         shell: bash
         run: |
