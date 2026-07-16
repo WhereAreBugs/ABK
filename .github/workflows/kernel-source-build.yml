@@ -367,21 +367,69 @@ jobs:
 
           cd "$COMMON_ROOT"
           for patch_file in scope_min_manual_hooks_v1.9.patch scope_min_manual_hooks_v1.6.patch; do
-            [ -f "$patch_file" ] && patch -p1 < "$patch_file" || true
+            [ -f "$patch_file" ] && patch -p1 --forward --fuzz=3 < "$patch_file" || true
           done
           if [ "$EFFECTIVE_USE_LZ4KD" = "true" ]; then
-            [ -f lz4kd.patch ] && patch -p1 < lz4kd.patch || true
-            [ -f lz4k_oplus.patch ] && patch -p1 < lz4k_oplus.patch || true
+            [ -f lz4kd.patch ] && patch -p1 --forward --fuzz=3 < lz4kd.patch || true
+            [ -f lz4k_oplus.patch ] && patch -p1 --forward --fuzz=3 < lz4k_oplus.patch || true
           elif [ "$KERNEL_VERSION" = "6.1" ]; then
             [ -f 001-lz4.patch ] && git apply -p1 < 001-lz4.patch || true
-            [ -f 002-zstd.patch ] && patch -p1 < 002-zstd.patch || true
+            [ -f 002-zstd.patch ] && patch -p1 --forward --fuzz=3 < 002-zstd.patch || true
           elif [ "$KERNEL_VERSION" = "6.6" ]; then
             [ -f 001-lz4.patch ] && git apply -p1 < 001-lz4.patch || true
           fi
           if [ "$EFFECTIVE_ENABLE_SUSFS" = "true" ]; then
             [ -f "50_add_susfs_in_gki-${ANDROID_VERSION}-${KERNEL_VERSION}.patch" ] && \
-              patch -p1 < "50_add_susfs_in_gki-${ANDROID_VERSION}-${KERNEL_VERSION}.patch" || true
+              patch -p1 --forward --fuzz=3 < "50_add_susfs_in_gki-${ANDROID_VERSION}-${KERNEL_VERSION}.patch" || true
           fi
+
+      - name: 校验并修复 SUSFS 补丁应用
+        if: ${{ inputs.enable_susfs }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          COMMON_ROOT="$SOURCE_COMMON_ROOT"
+          cd "$COMMON_ROOT"
+
+          # 兜底：定制厂商树的 fs/ 源码常与 stock GKI 存在偏差，导致 susfs_def.h 的 include
+          # 补丁块被跳过，从而出现 SUSFS_IS_INODE_* 隐式声明。凡是使用了 SUSFS 宏但缺少头文件
+          # 包含的源码，这里补齐 #include <linux/susfs_def.h>。
+          python3 - "$COMMON_ROOT" <<'PY'
+          import sys, re
+          from pathlib import Path
+          root = Path(sys.argv[1])
+          include_line = "#include <linux/susfs_def.h>\n"
+          macro_re = re.compile(r'\bSUSFS_IS_INODE_|\bsusfs_is_current_proc_')
+          fixed = 0
+          for c in root.rglob("*.c"):
+              parts = c.relative_to(root).parts
+              if parts and parts[0] in {"out", ".git"}:
+                  continue
+              try:
+                  text = c.read_text(errors="ignore")
+              except Exception:
+                  continue
+              if not macro_re.search(text) or "linux/susfs_def.h" in text:
+                  continue
+              lines = text.splitlines(keepends=True)
+              idx = next((i for i, l in enumerate(lines) if l.startswith("#include ")), None)
+              if idx is None:
+                  continue
+              lines.insert(idx + 1, include_line)
+              c.write_text("".join(lines))
+              fixed += 1
+              print(f"补齐 susfs_def.h 包含: {c.relative_to(root)}")
+          print(f"共补齐 {fixed} 个源码文件的 SUSFS 头文件包含")
+          PY
+
+          if find . -name '*.rej' -print -quit | grep -q .; then
+            echo "::error::SUSFS 补丁在该定制内核树上存在无法应用的 hunk（.rej 文件）。"
+            echo "::error::该树的 fs/ 源码与 stock GKI 偏差过大。请改用 enable_susfs=false 重新构建，"
+            echo "::error::或改用已集成 SUSFS 的内核源码分支。"
+            find . -name '*.rej'
+            exit 1
+          fi
+          echo "SUSFS 补丁应用校验通过。"
 
       - name: 修复 SukiSU SUSFS 源码兼容
         if: ${{ inputs.ksu_variant == 'SukiSU' && inputs.enable_susfs }}
