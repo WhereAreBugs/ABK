@@ -209,6 +209,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("- name: 校验厂商源码引用完整性", workflow)
         self.assertIn('find "$SOURCE_COMMON_ROOT" -xtype l -print -quit', workflow)
         self.assertIn(r"r'^((?:\.\./)+)([^/]+)(?:/|$)'", workflow)
+        self.assertIn("needed.update(overrides)", workflow)
         self.assertIn('scripts/kconfig/merge_config.sh" -m -r -y', workflow)
         self.assertIn('make "${MAKE_ARGS[@]}" "$SOURCE_DEFCONFIG"', workflow)
         self.assertIn('make "${MAKE_ARGS[@]}" Image modules dtbs', workflow)

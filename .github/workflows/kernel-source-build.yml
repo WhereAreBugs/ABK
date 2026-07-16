@@ -280,11 +280,6 @@ jobs:
                   if ups > depth:
                       needed.add(m.group(2))
 
-          if not needed:
-              print("未发现需要的厂商同级仓库，跳过。")
-              raise SystemExit(0)
-          print("检测到需要的同级仓库目录:", ", ".join(sorted(needed)))
-
           # 2) 由主仓库 URL 反推同级仓库 URL：<dir>/android_kernel_<oem>_<soc[-suffix]>.git
           base = krepo[:-4] if krepo.endswith(".git") else krepo
           base_dir = base.rsplit("/", 1)[0]
@@ -299,6 +294,14 @@ jobs:
                   key = ov_name.rsplit("/", 1)[1]
                   key = key[len(prefix):] if key.startswith(prefix) else key
                   overrides[key] = ov
+
+          # 显式传入的仓库优先同步。不能依赖符号链接扫描，因为厂商树会以不同形式
+          # 表示链接目标（例如目标目录末尾不带斜杠）。
+          needed.update(overrides)
+          if not needed:
+              print("未发现需要的厂商同级仓库，跳过。")
+              raise SystemExit(0)
+          print("需要的同级仓库目录:", ", ".join(sorted(needed)))
 
           for sib in sorted(needed):
               dest = os.path.join(kroot, sib)
