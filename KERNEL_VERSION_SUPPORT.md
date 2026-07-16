@@ -119,3 +119,20 @@
 | 30 | 2025-07 |
 | 38 | 2025-09 |
 | 58 | 2025-12 |
+
+## 自定义源码构建（非 GKI manifest 内核树）
+
+上面的矩阵只覆盖 AOSP GKI `common-<android>-<kernel>-<date>` 分支。对于**厂商 / 定制 ROM 的完整内核树**
+（单个 Git 仓库即 `common`，如 `crdroidandroid/android_kernel_oneplus_sm8550`），请改用：
+
+- 入口：`.github/workflows/kernel-source-custom.yml`（"自定义源码内核构建"）
+- 复用逻辑：`.github/workflows/kernel-source-build.yml`
+
+说明：
+
+- 该路径 `git clone` 指定内核仓库，按其 `build.config.constants` 自动选择 Clang，编译 GKI `Image` 并打包
+  AnyKernel3（仅替换 boot 内核 Image，设备保留自带 `vendor_dlkm`/DTB）。
+- `kmi` 指真实 GKI KMI（例如 5.15 内核填 `android13-5.15`，与设备平台 Android 版本无关）。
+- `localversion` 用于设置 `uname -r` 后缀，例如源码 `5.15.208` + `localversion=android16-2026-05`
+  产出 `5.15.208-android16-2026-05`。
+- 若设备需要厂商 GKI 配置，`extra_config_fragment` 可填 `vendor/<soc>_GKI.config`（逗号分隔可多个）。
